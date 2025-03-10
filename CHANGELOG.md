@@ -2,6 +2,10 @@
 
 ## 3.0.0 - 2024-02-11
 
+### Added
+
+- Craft 5 support
+
 ### Changed
 
 - Brevo adapter refactofing with additional fields support
