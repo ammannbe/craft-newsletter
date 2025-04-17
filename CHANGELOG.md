@@ -1,5 +1,11 @@
 # Release Notes for Newsletter
 
+## 3.0.1 - 2024-04-17
+
+### Fixed
+
+- Fixed issue updating Mailjet contact without a payload
+
 ## 3.0.0 - 2024-02-11
 
 ### Added

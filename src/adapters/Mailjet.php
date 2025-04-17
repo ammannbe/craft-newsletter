@@ -89,7 +89,7 @@ class Mailjet extends BaseNewsletterAdapter
             }
         }
 
-        if (null !== $additionalFields && !$this->_updateContactData($client, $contactId, $additionalFields)) {
+        if (!empty($additionalFields) && !$this->_updateContactData($client, $contactId, $additionalFields)) {
             return false;
         }
 
