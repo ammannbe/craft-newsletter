@@ -15,11 +15,15 @@ use yii\helpers\VarDumper;
 class Mailchimp extends BaseNewsletterAdapter
 {
     public $apiKey;
+
     public $serverPrefix;
+
     public $listId;
 
     private $_errorMessage;
+
     private $_client;
+
     private $_listApi;
 
     /**
@@ -57,6 +61,15 @@ class Mailchimp extends BaseNewsletterAdapter
         ]);
     }
 
+    public function subscribe(string $email, array $additionalFields = null): bool
+    {
+        $client = $this->getClient();
+        $listsApi = $this->getListApi($client);
+        $parsedListId = App::parseEnv($this->listId);
+
+        return $this->_registerContact($email, $listsApi, $parsedListId, $additionalFields ?? []);
+    }
+
     public function getClient(): ApiClient
     {
         if (is_null($this->_client)) {
@@ -78,6 +91,7 @@ class Mailchimp extends BaseNewsletterAdapter
         if (is_null($this->_listApi)) {
             $this->_listApi = new ListsApi($client);
         }
+
         return $this->_listApi;
     }
 
@@ -86,42 +100,19 @@ class Mailchimp extends BaseNewsletterAdapter
         $this->_listApi = $listsApi;
     }
 
-    public function subscribe(string $email, array $additionalFields = null): bool
-    {
-        $client = $this->getClient();
-        $listsApi = $this->getListApi($client);
-        $parsedListId = App::parseEnv($this->listId);
-
-        if (!$this->_contactExist($email, $listsApi, $parsedListId)) {
-            return $this->_registerContact($email, $listsApi, $parsedListId, $additionalFields ?? []);
-       }
-
-        return true;
-    }
-
-    private function _contactExist(string $email, ListsApi $listsApi, string $listId): bool
-    {
-        try {
-            $listsApi->getListMember($listId, md5($email));
-            return true;
-        } catch (ClientException $clientException) {
-            $this->_getErrorMessage($clientException);
-            return false;
-        } catch (ConnectException $connectionException) {
-            $this->_getErrorConnect($connectionException);
-            return false;
-        }
-    }
-
-    private function _registerContact(string $email, ListsApi $listsApi, string $listId, array $additionalFields = []): bool
-    {
+    private function _registerContact(
+        string $email,
+        ListsApi $listsApi,
+        string $listId,
+        array $additionalFields = [],
+    ): bool {
         try {
             $listsApi->setListMember($listId, $email, [
                 "email_address" => $email,
                 "status_if_new" => "subscribed",
                 "status" => "subscribed",
                 "double_optin" => true,
-                "merge_fields" => $additionalFields
+                "merge_fields" => $additionalFields,
             ]);
 
             return true;
@@ -129,25 +120,18 @@ class Mailchimp extends BaseNewsletterAdapter
             $response = Json::decode($clientException->getResponse()->getBody()->getContents(), true);
             $status = $response['status'] ?? 400;
             $title = $response['title'] ?? '';
-            if($status === 400 && $title === 'Forgotten Email Not Subscribed') {
+            if ($status === 400 && $title === 'Forgotten Email Not Subscribed') {
                 // Contact was permanently deleted from list,
                 // consider him as already subscribed to prevent email enumeration
                 return true;
             }
+
             $this->_errorMessage = $this->_getErrorMessage($clientException);
             return false;
         } catch (ConnectException $connectException) {
             $this->_errorMessage = $this->_getErrorConnect($connectException);
             return false;
         }
-    }
-
-    private function _getErrorConnect(ConnectException $connectException): string
-    {
-        $errorMessage = Craft::t('newsletter', 'The newsletter service is not available at that time. Please, try again later.');
-        Craft::error('Mailchimp : ' . VarDumper::dumpAsString($connectException->getMessage()), __METHOD__);
-
-        return $errorMessage;
     }
 
     private function _getErrorMessage(ClientException $clientException): string
@@ -160,17 +144,42 @@ class Mailchimp extends BaseNewsletterAdapter
             405 => 'Mailchimp The requested method and resource are not compatible. See the Allow header for this resource’s available methods (405).',
             414 => 'Mailchimp The sub-resource requested is nested too deeply (414).',
             422 => 'Mailchimp You can only use the X-HTTP-Method-Override header with the POST method (422).',
+            426 => 'Mailchimp Your request was made with the HTTP protocol. Please make your request via HTTPS rather than HTTP (426).',
             429 => 'Mailchimp You have exceeded the limit of 10 simultaneous connections (429).',
             500 => 'Mailchimp An unexpected internal error has occurred. Please contact Support for more information (500).',
             503 => 'Mailchimp This method has been disabled (503).',
         ];
-        $errorMessage = Craft::t('newsletter', 'The newsletter service is not available at that time. Please, try again later.');
+        $errorMessage = Craft::t(
+            'newsletter',
+            'The newsletter service is not available at that time. Please, try again later.'
+        );
         if (array_key_exists($clientException->getCode(), $errorLogMessages)) {
-            Craft::error($errorLogMessages[$clientException->getCode()] . " " . VarDumper::dumpAsString($clientException->getResponse()), __METHOD__);
+            Craft::error(
+                $errorLogMessages[$clientException->getCode()] . " " . VarDumper::dumpAsString(
+                    $clientException->getResponse()
+                ),
+                __METHOD__
+            );
         } else {
-            $body = Json::decode($clientException->getResponse()->getBody()->getContents(), false);
-            $errorMessage = Craft::t('newsletter', 'An error has occurred : {errorMessage}.', ['errorMessage' => $body->detail ?? '']);
+            $body = Json::decode($clientException->getResponse()->getBody(), false);
+            $errorMessage = Craft::t(
+                'newsletter',
+                'An error has occurred : {errorMessage}',
+                ['errorMessage' => $body->detail ?? '']
+            );
         }
+
+        return $errorMessage;
+    }
+
+    private function _getErrorConnect(ConnectException $connectException): string
+    {
+        $errorMessage = Craft::t(
+            'newsletter',
+            'The newsletter service is not available at that time. Please, try again later.'
+        );
+        Craft::error('Mailchimp : ' . VarDumper::dumpAsString($connectException->getMessage()), __METHOD__);
+
         return $errorMessage;
     }
 

@@ -7,6 +7,7 @@ use craft\behaviors\EnvAttributeParserBehavior;
 use craft\helpers\App;
 use Mailjet\Client;
 use Mailjet\Resources;
+use Mailjet\Response;
 use yii\helpers\VarDumper;
 
 /**
@@ -17,10 +18,13 @@ use yii\helpers\VarDumper;
 class Mailjet extends BaseNewsletterAdapter
 {
     public $apiKey;
+
     public $apiSecret;
+
     public $listId;
 
     private $_client;
+
     private $_errorMessage;
 
     /**
@@ -77,15 +81,22 @@ class Mailjet extends BaseNewsletterAdapter
     {
         $this->_errorMessage = null;
         $client = $this->getClient();
-        if (!$this->_contactExist($client, $email) && !$this->_registerContact($client, $email)) {
+        $contactId = $this->_getContactId($client, $email);
+        if (!$contactId) {
+            $contactId = $this->_registerContact($client, $email);
+            if (!$contactId) {
+                return false;
+            }
+        }
+
+        if (!empty($additionalFields) && !$this->_updateContactData($client, $contactId, $additionalFields)) {
             return false;
         }
-        if (null !== $additionalFields && !$this->_updateContactData($client, $email, $additionalFields)) {
-            return false;
-        }
+
         if ($this->listId) {
             return $this->_subscribeContactToList($client, $email);
         }
+
         return true;
     }
 
@@ -102,26 +113,27 @@ class Mailjet extends BaseNewsletterAdapter
                 ['version' => 'v3']
             );
         }
+
         return $this->_client;
     }
 
     /**
-     * @param Client $client
-     * @param string $email
-     * @return bool
+     * @return int|null
      */
-    private function _contactExist(Client $client, string $email): bool
+    private function _getContactId(Client $client, string $email): ?int
     {
-        // Check if contact already exists
-        return $client->get(Resources::$Contact, ['id' => $email])->success();
+        $response = $client->get(Resources::$Contact, ['id' => $email]);
+        if ($response->success()) {
+            return $response->getData()[0]['ID'] ?? null;
+        }
+
+        return null;
     }
 
     /**
-     * @param Client $client
-     * @param string $email
-     * @return bool
+     * @return int|null
      */
-    private function _registerContact(Client $client, string $email): bool
+    private function _registerContact(Client $client, string $email): ?int
     {
         $body = [
             'IsExcludedFromCampaigns' => "false",
@@ -131,15 +143,16 @@ class Mailjet extends BaseNewsletterAdapter
         $response = $client->post(Resources::$Contact, ['body' => $body]);
         if (!$response->success()) {
             $this->_errorMessage = $this->_getErrorMessageFromRessource($response);
+            return null;
         }
-        return $response->success();
+
+        return $response->getData()[0]['ID'] ?? null;
     }
 
     /**
-     * @param \Mailjet\Response $response
      * @return string
      */
-    private function _getErrorMessageFromRessource(\Mailjet\Response $response): string
+    private function _getErrorMessageFromRessource(Response $response): string
     {
         $errorLogMessages = [
             400 => 'Mailjet bad request occurred (400).',
@@ -163,35 +176,32 @@ class Mailjet extends BaseNewsletterAdapter
             $body = $response->getBody();
             if (isset($body['ErrorInfo']) || isset($body['ErrorMessage'])) {
                 Craft::error(
-                    "Mailjet unknown error ({$response->getStatus()}). " . VarDumper::dumpAsString($response),
+                    sprintf('Mailjet unknown error (%s). ', $response->getStatus()) . VarDumper::dumpAsString($response),
                     __METHOD__
                 );
             }
         }
+
         return $errorMessage;
     }
 
     /**
-     * @param Client $client
-     * @param string $email
-     * @param array $data
      * @return bool
      */
-    private function _updateContactData(Client $client, string $email, array $data): bool
+    private function _updateContactData(Client $client, int $contactId, array $data): bool
     {
         $body = array_map(static fn($key, $value) => ['Name' => $key, 'Value' => $value],
             array_keys($data),
             array_values($data));
-        $response = $client->post(Resources::$Contactdata, ['contact_email' => $email, 'body' => $body]);
+        $response = $client->put(Resources::$Contactdata, ['id' => $contactId, 'body' => ['Data' => $body]]);
         if (!$response->success()) {
             $this->_errorMessage = $this->_getErrorMessageFromRessource($response);
         }
+
         return $response->success();
     }
 
     /**
-     * @param Client $client
-     * @param string $email
      * @return bool
      */
     private function _subscribeContactToList(Client $client, string $email): bool
@@ -199,7 +209,7 @@ class Mailjet extends BaseNewsletterAdapter
         // Register contact to list
         $body = [
             'Properties' => "object",
-            'Action' => "addnoforce",
+            'Action' => "addforce",
             'Email' => $email,
         ];
         $response = $client->post(
@@ -209,6 +219,7 @@ class Mailjet extends BaseNewsletterAdapter
         if (!$response->success()) {
             $this->_errorMessage = $this->_getErrorMessageFromRessource($response);
         }
+
         return $response->success();
     }
 
